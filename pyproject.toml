@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-analyst-workbench"
+version = "1.0.0"
+description = "A fast, open-source Data Analyst Workbench CLI"
+authors = [{ name = "Data Analyst" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "duckdb>=1.0.0",
+    "polars>=1.0.0",
+    "plotext>=6.0.0",
+    "rich>=13.0.0",
+    "visidata>=3.0",
+    "fastexcel>=0.10.0",
+    "openpyxl>=3.1.0"
+]
+
+[project.scripts]
+analyst = "workbench.cli:main"
+workbench = "workbench.cli:main"

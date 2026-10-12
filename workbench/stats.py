@@ -14,19 +14,36 @@ def show_stats(file_path: str):
 
     console.print(f"\n[bold cyan]Auditing dataset:[/bold cyan] [yellow]{file_path}[/yellow]")
     
-    # Load with polars
+    # Load with polars or sqlite
     try:
         if file_path.endswith(".parquet"):
             df = pl.read_parquet(file_path)
         elif file_path.endswith(".csv"):
-            df = pl.read_csv(file_path)
+            df = pl.read_csv(file_path, infer_schema_length=10000, ignore_errors=True)
+        elif file_path.endswith(".xlsx") or file_path.endswith(".xls"):
+            df = pl.read_excel(file_path)
         elif file_path.endswith(".json") or file_path.endswith(".ndjson"):
             df = pl.read_ndjson(file_path) if file_path.endswith(".ndjson") else pl.read_json(file_path)
+        elif file_path.endswith(".db") or file_path.endswith(".sqlite"):
+            # Read first table from sqlite database
+            import sqlite3
+            conn = sqlite3.connect(file_path)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+            tbls = [r[0] for r in cur.fetchall()]
+            if not tbls:
+                console.print(f"[yellow]No tables found in SQLite database {file_path}[/yellow]")
+                conn.close()
+                return
+            first_tbl = tbls[0]
+            console.print(f"[dim]Reading table '{first_tbl}' from SQLite database (found: {', '.join(tbls)})...[/dim]")
+            df = pl.read_database(f"SELECT * FROM {first_tbl}", conn)
+            conn.close()
         else:
             # Fallback to csv
             df = pl.read_csv(file_path)
     except Exception as e:
-        console.print(f"[bold red]Failed to read file with Polars:[/bold red] {e}")
+        console.print(f"[bold red]Failed to read file:[/bold red] {e}")
         return
 
     num_rows, num_cols = df.shape

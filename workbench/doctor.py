@@ -31,15 +31,24 @@ def run_doctor():
 
     # Python packages
     py_tools = [
-        ("duckdb", "Database Engine / SQL", "duckdb"),
+        ("duckdb", "Database Engine / OLAP", "duckdb"),
+        ("sqlite3", "Database Engine / OLTP (Row)", "sqlite3"),
         ("polars", "Dataframe Processing", "polars"),
+        ("openpyxl/fastexcel", "Excel Processing Engine", "openpyxl"),
         ("visidata", "Terminal Data Explorer", "visidata"),
         ("plotext", "Terminal Plotting", "plotext"),
         ("rich", "Terminal Styling & Tables", "rich"),
     ]
 
     for tool_name, desc, pkg in py_tools:
-        ok, detail = check_python_pkg(pkg)
+        if pkg == "sqlite3":
+            try:
+                import sqlite3
+                ok, detail = True, f"v{sqlite3.sqlite_version} (built-in)"
+            except Exception:
+                ok, detail = False, "Missing"
+        else:
+            ok, detail = check_python_pkg(pkg)
         status_str = "[green][OK] Installed[/green]" if ok else "[red][X] Missing[/red]"
         table.add_row(f"{tool_name} (Python)", desc, status_str, detail)
 

@@ -16,7 +16,10 @@ def inspect_data(file_path: str | None = None):
         # Search for candidates in current directory
         candidates = glob.glob("data/**/*.csv", recursive=True) + \
                      glob.glob("data/**/*.parquet", recursive=True) + \
-                     glob.glob("*.csv") + glob.glob("*.parquet")
+                     glob.glob("data/**/*.xlsx", recursive=True) + \
+                     glob.glob("data/**/*.db", recursive=True) + \
+                     glob.glob("data/**/*.sqlite", recursive=True) + \
+                     glob.glob("*.csv") + glob.glob("*.parquet") + glob.glob("*.xlsx") + glob.glob("*.db")
         if candidates:
             file_path = candidates[0]
             console.print(f"[cyan]Auto-detected data file:[/cyan] [yellow]{file_path}[/yellow]")

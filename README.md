@@ -1,46 +1,53 @@
 # 🛠️ Data Analyst Workbench
 
-A fast, open-source, and context-aware CLI toolkit tailored for professional Data Analysts. It implements a resilient **7-Stage Audited ETL Pipeline** with a built-in **Checkpoint & Quarantine Engine (What, Why, How)**—unifying terminal data exploration, OLTP-to-OLAP modeling, interactive web BI dashboards, and executive presentations into a single command workflow.
+[![CI Pipeline](https://github.com/awesomecrow/data-analyst-workbench/actions/workflows/ci.yml/badge.svg)](https://github.com/awesomecrow/data-analyst-workbench/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Architecture](https://img.shields.io/badge/Architecture-7--Stage%20Audited%20ETL-green.svg)](#-7-stage-audited-pipeline-architecture)
+
+A fast, open-source, and context-aware CLI toolkit tailored for professional Data Analysts. It implements a resilient **7-Stage Audited ETL Pipeline** with an integrated **Checkpoint & Quarantine Audit Engine (`What`, `Why`, `How`)**—unifying local terminal data exploration, OLTP-to-OLAP dimensional modeling, interactive web BI dashboards, and stakeholder presentations into a single command workflow.
 
 ---
 
 ## 🏗️ 7-Stage Audited Pipeline Architecture
 
+Every project follows an audited, resilient data engineering workflow with dual validation gates and exception isolation:
+
 ```
-[ 1. SOURCES ] (SQLite OLTP, Excel/CSV, JSON, Laravel DB, n8n Inbound)
+[ 1. SOURCES ] (SQLite OLTP, Excel, CSV, JSON, Laravel DB, n8n Inbound)
        │
        ▼
-[ 2. EXTRACT ] ────────────────► Checkpoint 1 (What, Why, How)
+[ 2. RAW DATA PLACEMENT ] ────► User places source files into data/raw/
        │
        ▼
-[ 3. STAGING / LANDING ] ──────► Checkpoint 2 (Immutable Raw Parquet in data/staging/)
+[ 3. EXTRACT & STAGING ] ─────► Checkpoints 1 & 2 (Immutable Parquet in data/staging/)
        │
        ▼
-[ 4. SOURCE VALIDATION ] ──────► Checkpoint 3 (Gate 1: Validasi Awal)
-  ├── LULUS (Valid) ──► Continue to Transform
-  └── GAGAL (Invalid) ► Quarantine / Error Log (data/quarantine/error_log.json & CSV)
+[ 4. SOURCE VALIDATION ] ─────► Checkpoint 3 (Gate 1: Pre-Flight Check)
+  ├── PASSED (Valid) ────────► Continue to Transform
+  └── FAILED (Invalid) ──────► Quarantine / Exception Log (data/quarantine/error_log.json & CSV)
        │
        ▼
-[ 5. TRANSFORM ] ──────────────► Checkpoint 4 (Polars Hygiene, Joins, OBT & Star Marts)
+[ 5. TRANSFORM ] ─────────────► Checkpoint 4 (Polars Hygiene, Joins, OBT & Star Marts)
        │
        ▼
-[ 6. TARGET VALIDATION & LOAD ]► Checkpoint 5 & 6 (Gate 2: Reconciliation -> DuckDB & Parquet)
+[ 6. TARGET VALIDATION & LOAD]► Checkpoint 5 & 6 (Gate 2: Reconciliation -> DuckDB & Parquet)
        │
        ▼
-[ 7. BUSINESS INTELLIGENCE ] ──► Evidence.dev Web BI, Marp Slides, DuckDB SQL Models
+[ 7. BUSINESS INTELLIGENCE ] ─► Evidence.dev Web BI, Marp Slides, DuckDB SQL Models
 ```
 
 ---
 
-## 🧰 Integrated Open-Source Stack
+## 🧰 Integrated Open-Source Analytics Stack
 
-1. **DuckDB:** Embedded high-performance OLAP SQL database engine (analytical marts & fast queries).
+1. **DuckDB:** Embedded high-performance OLAP SQL database engine (analytical marts & sub-second queries).
 2. **SQLite (`sqlite3`):** Row-based OLTP database engine for transactional data simulation and ingestion.
-3. **Polars (Core) & Pandas (Interop Bridge):** Blazing-fast columnar DataFrame library for ETL, paired with Pandas (`>=2.0`) interoperability via `.to_pandas()`.
-4. **Excel Engine (`openpyxl` & `fastexcel`):** Robust Excel (`.xlsx`, `.xls`) parsing and cleaning.
+3. **Polars (Core) & Pandas (Bridge):** Blazing-fast columnar DataFrame library for ETL, paired with seamless Pandas (`.to_pandas()`) interoperability.
+4. **Excel Engine (`openpyxl` & `fastexcel`):** Robust multi-sheet Excel (`.xlsx`, `.xls`) parsing and cleaning.
 5. **Checkpoint & Quarantine Engine:** Transparent stage-by-stage audit logging (`What`, `Why`, `How`) and automated exception quarantine (`data/quarantine/`).
 6. **VisiData (`vd`):** Terminal-based interactive spreadsheet for instant cell-level auditing.
-7. **Plotext & Rich:** Terminal charting, formatted tables, and schema inspector.
+7. **Plotext & Rich:** Terminal ASCII/Unicode charting, styled tables, and schema profiling.
 8. **Evidence.dev:** Code-first BI dashboard powered by Markdown + SQL.
 9. **Marp:** Markdown presentation slides for executive readouts (HTML/PDF).
 
@@ -48,10 +55,11 @@ A fast, open-source, and context-aware CLI toolkit tailored for professional Dat
 
 ## 🚀 Quickstart & Installation
 
-Clone or navigate to the repository directory, then install in editable mode:
+Clone the repository and install in editable mode:
 
 ```powershell
-cd "C:\Projects\data_analyst\data analyst workbench"
+git clone https://github.com/awesomecrow/data-analyst-workbench.git
+cd data-analyst-workbench
 pip install -e .
 ```
 
@@ -64,103 +72,80 @@ analyst doctor
 
 ## ⚡ Daily Workflow & Commands
 
-### 1. Scaffold a Context-Specific Project
-Whenever a new stakeholder request or business question arises:
+### 1. Scaffold a New Analytics Project
+Create an isolated workspace for any analytics task:
 ```powershell
-# In default projects directory:
-analyst new pizza-sales --template restaurant-sales
+# Create project in default workspace directory
+analyst new quarterly_performance
 
-# In a specific directory using --path / -p:
-analyst new pizza-sales --path "C:\Projects\data_analyst"
-```
-This generates a standardized 7-stage project structure:
-```
-pizza-sales/
-├── data/
-│   ├── raw/
-│   │   ├── pos_transactions.db  <- Normalized SQLite OLTP database (stores, orders, items)
-│   │   └── branch_targets.csv   <- Budget/target benchmarks (CSV/Excel)
-│   ├── staging/                 <- Immutable landing Parquet snapshots
-│   ├── quarantine/              <- Rejected rows CSV & error_log.json (Daftar Pengecualian)
-│   ├── checkpoints/             <- Audit trail manifests (run_latest.json & history)
-│   ├── processed/ & marts/      <- High-performance Parquet dimensional marts
-│   └── analytics.duckdb         <- Persistent DuckDB OLAP database
-├── models/
-│   ├── data_dictionary.md       <- Schema documentation & metric definitions
-│   └── marts.sql                <- Analytical SQL models & business queries
-├── etl.py                       <- 7-Stage Polars ETL pipeline with CheckpointTracker
-├── reports/                     <- Evidence.dev interactive BI dashboard
-│   ├── evidence.config.yaml
-│   └── pages/home.md            <- Dashboard pages (Markdown + SQL)
-├── slides/
-│   └── presentation.md          <- Marp executive presentation slide deck
-└── README.md
+# Or specify a custom destination path:
+analyst new quarterly_performance --path "D:\Projects"
 ```
 
-### 2. Inspect & Audit Data Interactively
-Open any dataset (CSV, JSON, Excel `.xlsx`, or SQLite `.db`) in VisiData for rapid cell editing, filtering, and frequency analysis:
+### 2. Place Your Raw Source Data
+Copy your inbound files (Excel spreadsheets, CSV dumps, or SQLite databases) directly into the raw data directory:
+```
+quarterly_performance/data/raw/
+```
+> **Best Practice:** Keep raw files immutable. Do not edit them manually so you always maintain an untouched source of truth.
+
+### 3. Inspect & Audit Raw Data in Terminal
+Open and profile any raw dataset directly in your terminal before running transformations:
 ```powershell
-analyst inspect data/raw/branch_targets.csv
-analyst inspect data/raw/pos_transactions.db
+# Open interactive terminal spreadsheet (VisiData)
+analyst inspect data/raw/transactions.xlsx
+
+# Check null counts, schema types, and distribution histograms
+analyst stats data/raw/transactions.xlsx
 ```
 
-### 3. Profile Schema & Statistical Distribution
-Inspect column types, null counts, and view an ASCII histogram in your terminal:
+### 4. Execute the 7-Stage Audited ETL Pipeline
+Run the transformation pipeline with automated audit logging:
 ```powershell
-analyst stats data/raw/branch_targets.csv
-analyst stats data/raw/pos_transactions.db
-```
-
-### 4. Run the 7-Stage Audited ETL Pipeline
-Extract transactional row data, stage raw snapshots, quarantine invalid records, transform via Polars, verify target reconciliation, and load into DuckDB & Parquet:
-```powershell
-# Standard execution with Checkpoint output
+# Standard execution
 analyst run
 
 # Interactive mode (pauses at each checkpoint for user confirmation)
 analyst run --interactive
 ```
 
-### 5. Inspect Checkpoints (What, Why, How) & Quarantine Logs
-Review the complete audit trail of your pipeline run at any time:
+### 5. Inspect Audit Checkpoints & Quarantine Logs
+Inspect what happened during data processing without guessing:
 ```powershell
-# Show latest stage-by-stage What, Why, How audit table
+# View latest stage-by-stage What, Why, How audit report
 analyst checkpoint
 
-# Inspect quarantined records and rejection reasons
+# View quarantined / rejected records and failure reasons
 analyst checkpoint --quarantine
 
-# List all historical pipeline runs
+# View history of all past pipeline runs
 analyst checkpoint --list
 ```
 
-### 6. Query DuckDB Directly
-Run queries against your local DuckDB analytical database with formatted Rich tables:
+### 6. Query Analytical Marts with SQL
+Execute fast analytical SQL queries against local DuckDB marts:
 ```powershell
-# Inline query
-analyst query "SELECT * FROM mart_store_performance;"
-
-# Run from a SQL model file
+# Execute analytical model file
 analyst query models/marts.sql
 
-# Open interactive DuckDB terminal shell
-analyst query
+# Or execute an inline SQL query:
+analyst query "SELECT * FROM mart_store_performance LIMIT 5;"
 ```
 
-### 7. Launch the Interactive BI Dashboard
-Start your local Evidence.dev web dashboard:
+### 7. Generate Stakeholder Deliverables
+
+#### Interactive Web BI Dashboard (Evidence.dev)
 ```powershell
 analyst dashboard
 ```
-Open `http://localhost:3000` to interact with charts, KPI cards, and filters.
+Open `http://localhost:3000` to interact with KPI cards, bar charts, and data tables.
 
-### 8. Compile Presentation Slides for Stakeholders
-Export your findings to a slide deck for store managers and executives using Marp:
+#### Executive Presentation Slide Deck (Marp)
 ```powershell
-# Compile to HTML slides
+# Compile to presentation-ready HTML slides
 analyst slides --format html
 
-# Compile to PDF
+# Compile to executive PDF document
 analyst slides --format pdf
 ```
 
@@ -168,30 +153,16 @@ analyst slides --format pdf
 
 ## 🤖 AI Co-Pilot & Project Management
 
-### 9. Ask Natural Language Questions (`analyst ask`)
-Ask questions in plain English; the AI inspects your DuckDB schema, writes the SQL, executes it, and provides business insights:
 ```powershell
+# Ask natural language questions (AI writes SQL and analyzes results)
 analyst ask "Which item had the highest revenue and gross profit margin?"
-```
 
-### 10. Track Your Entire Project Portfolio (`analyst list`)
-List all projects across your designated workspace, including database status, dashboard readiness, and modification dates:
-```powershell
+# List and monitor all analytics projects in your workspace
 analyst list
-```
 
-### 11. Configure Default Paths & AI Keys (`analyst config`)
-```powershell
-# View settings
-analyst config
-
-# Set default projects parent directory
-analyst config --set-dir "C:\Projects\data_analyst"
-
-# Configure AI API key
-analyst config --set-key "<YOUR_API_KEY>"
-
-# Set AI provider (gemini, openai, ollama)
+# Manage configuration (default workspace path & AI API keys)
+analyst config --set-dir "D:\Projects"
+analyst config --set-key "<API_KEY>"
 analyst config --set-provider gemini
 ```
 
@@ -199,6 +170,6 @@ analyst config --set-provider gemini
 
 ## 🤝 Contributing & License
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct and development workflow.
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on code standards and pull request workflows.
 
 Licensed under the [MIT License](LICENSE).

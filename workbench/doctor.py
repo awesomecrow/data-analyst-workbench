@@ -33,7 +33,8 @@ def run_doctor():
     py_tools = [
         ("duckdb", "Database Engine / OLAP", "duckdb"),
         ("sqlite3", "Database Engine / OLTP (Row)", "sqlite3"),
-        ("polars", "Dataframe Processing", "polars"),
+        ("polars", "Dataframe Processing (Core)", "polars"),
+        ("pandas", "Dataframe Interop / Bridge", "pandas"),
         ("openpyxl/fastexcel", "Excel Processing Engine", "openpyxl"),
         ("visidata", "Terminal Data Explorer", "visidata"),
         ("plotext", "Terminal Plotting", "plotext"),

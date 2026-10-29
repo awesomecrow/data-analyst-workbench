@@ -13,13 +13,17 @@ from workbench.query_tool import run_query
 from workbench.config import print_config, set_config_value, load_config
 from workbench.registry import list_projects
 from workbench.ai import ask_ai
+from workbench.checkpoint import show_checkpoint
 
 console = Console()
 
-def run_etl():
+def run_etl(interactive: bool = False):
     if os.path.exists("etl.py"):
-        console.print("[cyan]Executing ETL pipeline (etl.py)...[/cyan]")
-        subprocess.run([sys.executable, "etl.py"])
+        console.print("[cyan]Executing 7-Stage ETL pipeline (etl.py)...[/cyan]")
+        cmd = [sys.executable, "etl.py"]
+        if interactive:
+            cmd.append("--interactive")
+        subprocess.run(cmd)
     else:
         console.print("[yellow]No etl.py script found in current directory.[/yellow]")
 
@@ -113,7 +117,14 @@ def main():
     query_parser.add_argument("--db", default="data/analytics.duckdb", help="Path to DuckDB database")
 
     # run
-    subparsers.add_parser("run", help="Execute the project's ETL pipeline (etl.py)")
+    run_parser = subparsers.add_parser("run", help="Execute the project's 7-Stage ETL pipeline (etl.py)")
+    run_parser.add_argument("--interactive", "-i", action="store_true", help="Pause at each checkpoint for user confirmation")
+
+    # checkpoint
+    cp_parser = subparsers.add_parser("checkpoint", help="Inspect ETL pipeline checkpoints (What, Why, How) and quarantine logs")
+    cp_parser.add_argument("--list", "-l", action="store_true", help="List historical checkpoint runs")
+    cp_parser.add_argument("--quarantine", "-q", action="store_true", help="Show quarantined / rejected records log")
+    cp_parser.add_argument("--run-id", default=None, help="Inspect a specific historical run ID")
 
     # dashboard
     dash_parser = subparsers.add_parser("dashboard", help="Start the Evidence.dev BI dashboard server")
@@ -153,7 +164,9 @@ def main():
     elif args.command == "query":
         run_query(args.sql, args.db)
     elif args.command == "run":
-        run_etl()
+        run_etl(interactive=args.interactive)
+    elif args.command == "checkpoint":
+        show_checkpoint(list_runs=args.list, show_quarantine=args.quarantine, run_id=args.run_id)
     elif args.command == "dashboard":
         launch_dashboard(args.port)
     elif args.command == "slides":

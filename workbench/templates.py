@@ -1,9 +1,7 @@
 import os
-import csv
 import subprocess
 import shutil
 import sqlite3
-import duckdb
 from rich.console import Console
 
 from workbench.config import load_config
@@ -16,9 +14,20 @@ BRANCH_TARGETS_CSV = """store_id,store_name,monthly_target,target_volume
 3,Suburban Express,300.00,20
 """
 
-DATA_DICTIONARY_MD = """# Data Dictionary & Business Metric Definitions
+DATA_DICTIONARY_MD = """# Data Dictionary & 7-Stage Pipeline Governance
 
-## Business Metric Definitions
+## 1. 7-Stage Pipeline Architecture
+1. **Sources:** Multi-source operational inputs (`data/raw/pos_transactions.db` SQLite OLTP, `data/raw/branch_targets.csv`, Excel `.xlsx`, or upstream DB/Webhooks).
+2. **Extract:** High-speed connectors via `sqlite3`, `polars`, and `fastexcel`/`openpyxl`.
+3. **Staging / Landing:** Immutable raw snapshots persisted in `data/staging/*.parquet`.
+4. **Source Validation (Gate 1):** Pre-flight schema and rule checks. Invalid records are routed to `data/quarantine/` (`error_log.json` & CSV).
+5. **Transform:** Standardization, relational joins, currency/date hygiene, and Star/OBT modeling via Polars (with zero-copy `.to_pandas()` bridge).
+6. **Target Validation (Gate 2) & Load:** Cross-table revenue reconciliation and data contract assertions before loading into `data/processed/`, `data/marts/`, and `data/analytics.duckdb`.
+7. **Business Intelligence & Deliverables:** Interactive web BI (`reports/` via Evidence.dev), executive slides (`slides/` via Marp), and SQL models (`models/marts.sql`).
+
+---
+
+## 2. Business Metric Definitions
 * **Gross Sales ($):** Total sales value before discounts (`quantity * unit_price`).
 * **Discount ($):** Value of promotion, voucher, or loyalty rebate applied.
 * **Net Revenue ($):** Realized income received from the customer (`gross_sales - discount_amount`).
@@ -30,7 +39,7 @@ DATA_DICTIONARY_MD = """# Data Dictionary & Business Metric Definitions
 
 ---
 
-## OLTP Source Schema (`data/raw/pos_transactions.db` - SQLite)
+## 3. OLTP Source Schema (`data/raw/pos_transactions.db` - SQLite)
 * `stores`: `(store_id INT, store_name TEXT, city TEXT, store_type TEXT)`
 * `categories`: `(category_id INT, category_name TEXT)`
 * `menu_items`: `(menu_id INT, menu_name TEXT, category_id INT, unit_price REAL, cogs REAL)`
@@ -39,7 +48,7 @@ DATA_DICTIONARY_MD = """# Data Dictionary & Business Metric Definitions
 
 ---
 
-## OLAP Analytical Target Schema (`data/analytics.duckdb` & Parquet)
+## 4. OLAP Analytical Target Schema (`data/analytics.duckdb` & Parquet)
 * `fact_order_details`: Denormalized One Big Table (OBT) detailing line-item performance, margins, and store metadata.
 * `mart_store_performance`: Store-level aggregates joined with executive targets.
 * `mart_menu_profitability`: Product-level margin contribution and sales volume ranking.
@@ -74,102 +83,288 @@ ORDER BY gross_profit DESC;
 """
 
 ETL_PIPELINE_SCRIPT = """import os
+import sys
 import sqlite3
 import polars as pl
 import duckdb
 from rich.console import Console
+from workbench.checkpoint import CheckpointTracker
 
 console = Console()
 
-def run_etl():
-    console.print("[bold cyan]Starting End-to-End ETL Pipeline (OLTP -> OLAP)...[/bold cyan]")
-    
-    # --- 1. EXTRACT ---
-    console.print("[dim]1. Extracting 3NF relational data from SQLite (OLTP)...[/dim]")
+
+def run_etl(interactive: bool = False):
+    console.print("[bold cyan]Starting 7-Stage Audited ETL Pipeline (OLTP -> Quarantine Gate -> OLAP)...[/bold cyan]")
+    tracker = CheckpointTracker(project_name=os.path.basename(os.getcwd()), interactive=interactive)
+
+    # =========================================================================
+    # STAGE 1 & 2: SOURCES & EXTRACT
+    # =========================================================================
     sqlite_path = "data/raw/pos_transactions.db"
     conn_sqlite = sqlite3.connect(sqlite_path)
-    
-    df_orders = pl.read_database("SELECT * FROM orders", conn_sqlite)
-    df_items = pl.read_database("SELECT * FROM order_items", conn_sqlite)
+
+    df_orders_raw = pl.read_database("SELECT * FROM orders", conn_sqlite)
+    df_items_raw = pl.read_database("SELECT * FROM order_items", conn_sqlite)
     df_menu = pl.read_database("SELECT * FROM menu_items", conn_sqlite)
     df_cat = pl.read_database("SELECT * FROM categories", conn_sqlite)
     df_stores = pl.read_database("SELECT * FROM stores", conn_sqlite)
     conn_sqlite.close()
 
-    console.print("[dim]2. Extracting target budget from CSV...[/dim]")
     df_targets = pl.read_csv("data/raw/branch_targets.csv")
 
-    # --- 2. TRANSFORM (Data Hygiene & Dimensional Modeling) ---
-    console.print("[dim]3. Transforming & calculating business metrics (OBT & Marts)...[/dim]")
-    
-    # Join Menu with Category
-    df_menu_enriched = df_menu.join(df_cat, on="category_id", how="left")
+    tracker.record_stage(
+        stage_num=1,
+        stage_name="EXTRACT (Sources)",
+        what=f"Extracted {len(df_orders_raw)} orders, {len(df_items_raw)} order items, {len(df_menu)} menu items from SQLite OLTP, and {len(df_targets)} branch targets from CSV.",
+        why="Collect raw operational POS transactions and monthly executive budget targets from source systems.",
+        how="Executed sqlite3 relational extraction via pl.read_database() and CSV ingestion via pl.read_csv().",
+        status="PASSED",
+        metrics={
+            "raw_orders": len(df_orders_raw),
+            "raw_items": len(df_items_raw),
+            "stores": len(df_stores),
+            "targets": len(df_targets),
+        },
+    )
 
-    # Join Order Items with Enriched Menu
+    # =========================================================================
+    # STAGE 3: STAGING / LANDING
+    # =========================================================================
+    os.makedirs("data/staging", exist_ok=True)
+    df_orders_raw.write_parquet("data/staging/stg_orders_raw.parquet")
+    df_items_raw.write_parquet("data/staging/stg_order_items_raw.parquet")
+    df_targets.write_parquet("data/staging/stg_branch_targets.parquet")
+
+    tracker.record_stage(
+        stage_num=2,
+        stage_name="STAGING / LANDING",
+        what="Materialized immutable raw extracts into data/staging/*.parquet before applying validation filters.",
+        why="Preserve an exact landing copy of source data for auditability and replay without re-querying operational DBs.",
+        how="Saved Polars DataFrames to Snappy-compressed Parquet snapshots in data/staging/.",
+        status="PASSED",
+        metrics={"staging_files": 3},
+    )
+
+    # =========================================================================
+    # STAGE 4: SOURCE VALIDATION (Gate 1 - Validasi Awal & Quarantine)
+    # =========================================================================
+    os.makedirs("data/quarantine", exist_ok=True)
+
+    # Validate Orders: order_datetime must not be null/empty and order_status must be 'Completed'
+    valid_order_mask = (
+        pl.col("order_datetime").is_not_null()
+        & (pl.col("order_datetime").str.len_chars() >= 10)
+        & (pl.col("order_status") == "Completed")
+    )
+    df_orders_valid = df_orders_raw.filter(valid_order_mask)
+    df_orders_rejected = df_orders_raw.filter(~valid_order_mask)
+
+    if len(df_orders_rejected) > 0:
+        rej_orders_path = "data/quarantine/rejected_orders.csv"
+        df_orders_rejected.write_csv(rej_orders_path)
+        tracker.log_quarantine(
+            gate="SOURCE_VALIDATION",
+            source_table="orders",
+            reason="Missing order_datetime or non-Completed order_status",
+            rejected_count=len(df_orders_rejected),
+            sample_records=df_orders_rejected.to_dicts()[:3],
+            csv_path=rej_orders_path,
+        )
+
+    # Validate Order Items: quantity > 0, valid menu_id, and parent order_id must be valid
+    valid_menu_ids = df_menu["menu_id"].to_list()
+    valid_order_ids = df_orders_valid["order_id"].to_list()
+
+    valid_item_mask = (
+        (pl.col("quantity") > 0)
+        & pl.col("menu_id").is_in(valid_menu_ids)
+        & pl.col("order_id").is_in(valid_order_ids)
+    )
+    df_items = df_items_raw.filter(valid_item_mask)
+    df_items_rejected = df_items_raw.filter(~valid_item_mask)
+
+    if len(df_items_rejected) > 0:
+        rej_items_path = "data/quarantine/rejected_order_items.csv"
+        df_items_rejected.write_csv(rej_items_path)
+        tracker.log_quarantine(
+            gate="SOURCE_VALIDATION",
+            source_table="order_items",
+            reason="Invalid quantity (<= 0), unknown menu_id, or orphaned/cancelled order_id",
+            rejected_count=len(df_items_rejected),
+            sample_records=df_items_rejected.to_dicts()[:3],
+            csv_path=rej_items_path,
+        )
+
+    df_orders = df_orders_valid
+    total_quarantined = len(df_orders_rejected) + len(df_items_rejected)
+
+    tracker.record_stage(
+        stage_num=3,
+        stage_name="SOURCE VALIDATION (Gate 1)",
+        what=f"Validated incoming records: {len(df_orders)} orders & {len(df_items)} items passed; {total_quarantined} anomalous row(s) isolated to quarantine.",
+        why="Prevent corrupted timestamps, cancelled orders, or negative quantities from polluting downstream financial metrics.",
+        how="Applied Polars boolean predicate masks; routed failed rows to data/quarantine/*.csv and error_log.json.",
+        status="PASSED",
+        metrics={
+            "valid_orders": len(df_orders),
+            "valid_items": len(df_items),
+            "quarantined_rows": total_quarantined,
+        },
+    )
+
+    # =========================================================================
+    # STAGE 5: TRANSFORM (Standardize, Join, Compute OBT & Marts)
+    # =========================================================================
+    df_menu_enriched = df_menu.join(df_cat, on="category_id", how="left")
     df_items_enriched = df_items.join(df_menu_enriched, on="menu_id", how="left")
 
-    # Join with Orders & Stores (Building One Big Table / OBT)
-    df_obt = df_items_enriched.join(df_orders, on="order_id", how="left") \\
-                              .join(df_stores, on="store_id", how="left")
+    df_obt = (
+        df_items_enriched.join(df_orders, on="order_id", how="left")
+        .join(df_stores, on="store_id", how="left")
+    )
 
-    # Calculate analytical measures
-    df_obt = df_obt.with_columns([
-        (pl.col("quantity") * pl.col("unit_price")).round(2).alias("gross_sales"),
-        pl.col("discount_amount").fill_null(0.0).alias("discount"),
-    ]).with_columns([
-        (pl.col("gross_sales") - pl.col("discount")).round(2).alias("net_revenue"),
-        (pl.col("quantity") * pl.col("cogs")).round(2).alias("total_cogs")
-    ]).with_columns([
-        (pl.col("net_revenue") - pl.col("total_cogs")).round(2).alias("gross_profit"),
-        pl.col("order_datetime").str.slice(0, 10).alias("order_date"),
-        pl.col("order_datetime").str.slice(11, 2).cast(pl.Int32).alias("order_hour")
-    ]).with_columns([
-        ((pl.col("gross_profit") / pl.col("net_revenue")) * 100).round(2).alias("profit_margin_pct")
-    ])
+    df_obt = (
+        df_obt.with_columns([
+            (pl.col("quantity") * pl.col("unit_price")).round(2).alias("gross_sales"),
+            pl.col("discount_amount").fill_null(0.0).alias("discount"),
+        ])
+        .with_columns([
+            (pl.col("gross_sales") - pl.col("discount")).round(2).alias("net_revenue"),
+            (pl.col("quantity") * pl.col("cogs")).round(2).alias("total_cogs"),
+        ])
+        .with_columns([
+            (pl.col("net_revenue") - pl.col("total_cogs")).round(2).alias("gross_profit"),
+            pl.col("order_datetime").str.slice(0, 10).alias("order_date"),
+            pl.col("order_datetime").str.slice(11, 2).cast(pl.Int32).alias("order_hour"),
+        ])
+        .with_columns([
+            ((pl.col("gross_profit") / pl.col("net_revenue")) * 100).round(2).alias("profit_margin_pct")
+        ])
+    )
 
-    # Build Mart: Store Performance vs Target
+    # Optional Pandas Bridge (available anytime for custom scikit-learn / statsmodels workflows):
+    # df_obt_pandas = df_obt.to_pandas()
+
     store_actuals = df_obt.group_by(["store_id", "store_name"]).agg([
         pl.col("order_id").n_unique().alias("actual_orders"),
         pl.col("quantity").sum().alias("actual_volume"),
         pl.col("net_revenue").sum().round(2).alias("actual_revenue"),
-        pl.col("gross_profit").sum().round(2).alias("actual_profit")
+        pl.col("gross_profit").sum().round(2).alias("actual_profit"),
     ])
 
-    mart_store = store_actuals.join(df_targets, on=["store_id", "store_name"], how="left") \\
-                              .with_columns([
-                                  ((pl.col("actual_revenue") / pl.col("monthly_target")) * 100).round(2).alias("attainment_pct"),
-                                  ((pl.col("actual_profit") / pl.col("actual_revenue")) * 100).round(2).alias("margin_pct")
-                              ])
+    mart_store = (
+        store_actuals.join(df_targets, on=["store_id", "store_name"], how="left")
+        .with_columns([
+            ((pl.col("actual_revenue") / pl.col("monthly_target")) * 100).round(2).alias("attainment_pct"),
+            ((pl.col("actual_profit") / pl.col("actual_revenue")) * 100).round(2).alias("margin_pct"),
+        ])
+        .sort("actual_revenue", descending=True)
+    )
 
-    # Build Mart: Menu Profitability Matrix
-    mart_menu = df_obt.group_by(["menu_id", "menu_name", "category_name"]).agg([
-        pl.col("quantity").sum().alias("units_sold"),
-        pl.col("net_revenue").sum().round(2).alias("net_revenue"),
-        pl.col("total_cogs").sum().round(2).alias("total_cogs"),
-        pl.col("gross_profit").sum().round(2).alias("gross_profit")
-    ]).with_columns([
-        ((pl.col("gross_profit") / pl.col("net_revenue")) * 100).round(2).alias("profit_margin_pct")
-    ]).sort("gross_profit", descending=True)
+    mart_menu = (
+        df_obt.group_by(["menu_id", "menu_name", "category_name"])
+        .agg([
+            pl.col("quantity").sum().alias("units_sold"),
+            pl.col("net_revenue").sum().round(2).alias("net_revenue"),
+            pl.col("total_cogs").sum().round(2).alias("total_cogs"),
+            pl.col("gross_profit").sum().round(2).alias("gross_profit"),
+        ])
+        .with_columns([
+            ((pl.col("gross_profit") / pl.col("net_revenue")) * 100).round(2).alias("profit_margin_pct")
+        ])
+        .sort("gross_profit", descending=True)
+    )
 
-    # --- 3. LOAD (Processed Parquet & DuckDB Views) ---
-    console.print("[dim]4. Loading analytical marts into Parquet & DuckDB OLAP...[/dim]")
+    tracker.record_stage(
+        stage_num=4,
+        stage_name="TRANSFORM (OBT & Marts)",
+        what=f"Built denormalized OBT ({len(df_obt)} rows), Store Performance Mart ({len(mart_store)} stores), and Menu Profitability Mart ({len(mart_menu)} items).",
+        why="Transform 3NF operational tables into business-ready analytical structures answering revenue, margin, and target attainment.",
+        how="Joined 5 relational tables in Polars, imputed null discounts to 0.0, parsed ISO dates, and aggregated dimensional marts.",
+        status="PASSED",
+        metrics={
+            "obt_rows": len(df_obt),
+            "mart_store_rows": len(mart_store),
+            "mart_menu_rows": len(mart_menu),
+        },
+    )
+
+    # =========================================================================
+    # STAGE 6: TARGET VALIDATION (Gate 2 - Validasi Target & Reconciliation)
+    # =========================================================================
+    obt_rev = round(float(df_obt["net_revenue"].sum()), 2)
+    store_rev = round(float(mart_store["actual_revenue"].sum()), 2)
+    menu_rev = round(float(mart_menu["net_revenue"].sum()), 2)
+    min_margin = round(float(df_obt["profit_margin_pct"].min()), 2)
+
+    reconciled = (abs(obt_rev - store_rev) < 0.01) and (abs(obt_rev - menu_rev) < 0.01) and (min_margin > 0)
+    if not reconciled:
+        tracker.log_quarantine(
+            gate="TARGET_VALIDATION",
+            source_table="mart_reconciliation",
+            reason=f"Revenue mismatch: OBT={obt_rev}, StoreMart={store_rev}, MenuMart={menu_rev}",
+            rejected_count=1,
+        )
+        tracker.record_stage(
+            stage_num=5,
+            stage_name="TARGET VALIDATION (Gate 2)",
+            what="Target reconciliation failed between OBT and aggregated marts.",
+            why="Ensure 100% financial accuracy before exposing numbers to executive BI dashboards.",
+            how="Cross-checked sum(net_revenue) across OBT, Store Mart, and Menu Mart.",
+            status="FAILED",
+        )
+        tracker.finalize("FAILED")
+        sys.exit(1)
+
+    tracker.record_stage(
+        stage_num=5,
+        stage_name="TARGET VALIDATION (Gate 2)",
+        what=f"100% financial reconciliation verified: Total Net Revenue = ${obt_rev:.2f} across OBT, Store Mart, and Menu Mart (Min Margin = {min_margin}%).",
+        why="Guarantee zero discrepancy between line-item transactions and executive summary tables before loading to BI.",
+        how="Executed automated reconciliation assertions (OBT == Store Mart == Menu Mart) and positive margin boundary checks.",
+        status="PASSED",
+        metrics={
+            "reconciled_net_revenue": obt_rev,
+            "min_margin_pct": min_margin,
+        },
+    )
+
+    # =========================================================================
+    # STAGE 7: LOAD ANALYTICAL DATASET (Parquet & DuckDB OLAP Serving Layer)
+    # =========================================================================
     os.makedirs("data/processed", exist_ok=True)
-    df_obt.write_parquet("data/processed/fact_order_details.parquet")
-    mart_store.write_parquet("data/processed/mart_store_performance.parquet")
-    mart_menu.write_parquet("data/processed/mart_menu_profitability.parquet")
+    os.makedirs("data/marts", exist_ok=True)
 
-    # Register into DuckDB
+    for folder in ("data/processed", "data/marts"):
+        df_obt.write_parquet(f"{folder}/fact_order_details.parquet")
+        mart_store.write_parquet(f"{folder}/mart_store_performance.parquet")
+        mart_menu.write_parquet(f"{folder}/mart_menu_profitability.parquet")
+
     conn_duck = duckdb.connect("data/analytics.duckdb")
     conn_duck.execute("CREATE OR REPLACE TABLE fact_order_details AS SELECT * FROM 'data/processed/fact_order_details.parquet'")
     conn_duck.execute("CREATE OR REPLACE TABLE mart_store_performance AS SELECT * FROM 'data/processed/mart_store_performance.parquet'")
     conn_duck.execute("CREATE OR REPLACE TABLE mart_menu_profitability AS SELECT * FROM 'data/processed/mart_menu_profitability.parquet'")
     conn_duck.close()
 
-    console.print("[bold green][OK] ETL Pipeline Completed Successfully![/bold green]")
-    console.print("[dim]Parquet marts created and registered in data/analytics.duckdb[/dim]\\n")
+    tracker.record_stage(
+        stage_num=6,
+        stage_name="LOAD ANALYTICAL DATASET",
+        what="Persisted 3 analytical marts to Parquet (data/processed/ & data/marts/) and registered tables in data/analytics.duckdb.",
+        why="Provide sub-second columnar query performance for Evidence.dev BI dashboards, Marp slides, and ad-hoc SQL.",
+        how="Wrote Snappy Parquet files and executed CREATE OR REPLACE TABLE in DuckDB.",
+        status="PASSED",
+        metrics={"duckdb_tables": 3, "parquet_files": 6},
+    )
+
+    manifest_path = tracker.finalize("SUCCESS")
+    console.print("[bold green][OK] 7-Stage ETL Pipeline Completed Successfully![/bold green]")
+    console.print(f"[dim]Audit checkpoint manifest saved to: {manifest_path}[/dim]")
+    console.print("[dim]Run 'analyst checkpoint' anytime to inspect What, Why, How & Quarantine logs.[/dim]")
+
 
 if __name__ == "__main__":
-    run_etl()
+    is_interactive = "--interactive" in sys.argv or "-i" in sys.argv
+    run_etl(interactive=is_interactive)
 """
 
 EVIDENCE_DASHBOARD_MD = """# 🍕 Executive Restaurant & Store Analytics
@@ -260,7 +455,7 @@ marp: true
 theme: default
 paginate: true
 header: "🍕 Restaurant Performance | Executive Readout"
-footer: "Confidential - For Leadership Team"
+footer: "Confidential - Audited via 7-Stage Data Analyst Workbench"
 style: |
   section {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -274,16 +469,16 @@ style: |
 # 🍕 Executive Store & Product Performance Review
 ### Multi-Branch Revenue, Profit Margins & Target Attainment
 **Prepared by:** Lead Data Analyst  
-**Context:** OLTP Store POS Ingestion & Analytical Review
+**Audit Status:** 100% Reconciled via 7-Stage ETL & Quarantine Gate
 
 ---
 
 ## 1. Executive Summary & Topline Financials
 
-* **Total Net Revenue:** **$567.50** (after promotional discounts).
-* **Total Gross Profit:** **$362.00** achieving a healthy **63.8% Gross Margin**.
-* **Order Velocity:** **20 transactions** across 3 regional branches.
-* **Core Takeaway:** Revenue is healthy, but branch attainment varies significantly across suburban vs downtown locations.
+* **Total Net Revenue:** **$607.00** (after promotional discounts, 100% reconciled).
+* **Total Gross Profit:** **$405.50** achieving a strong **66.8% Gross Margin**.
+* **Order Velocity:** **20 verified transactions** across 3 regional branches (2 corrupted POS sync rows automatically quarantined).
+* **Core Takeaway:** Revenue is healthy, with Supreme and Classic categories driving the bulk of gross profit.
 
 ---
 
@@ -291,33 +486,32 @@ style: |
 
 | Branch | Actual Revenue | Monthly Target | Attainment % | Profit Margin |
 | :--- | :--- | :--- | :--- | :--- |
-| **Downtown Flagship** | $278.50 | $600.00 | **46.4%** | **64.2%** |
-| **Uptown Mall** | $174.00 | $450.00 | **38.7%** | **63.5%** |
-| **Suburban Express** | $115.00 | $300.00 | **38.3%** | **63.0%** |
+| **Downtown Flagship** | $296.00 | $600.00 | **49.3%** | **66.4%** |
+| **Uptown Mall** | $184.50 | $450.00 | **41.0%** | **66.7%** |
+| **Suburban Express** | $126.50 | $300.00 | **42.2%** | **68.0%** |
 
-*Downtown Flagship leads in volume and maintains the highest profit margin.*
+*Downtown Flagship leads in volume and revenue attainment.*
 
 ---
 
 ## 3. Menu Profitability Matrix (Stars vs Low-Margin)
 
-1. **The Meat Lovers (Supreme):** #1 Profit Driver ($112.00 Gross Profit, 67% margin).
-2. **The BBQ Chicken Pizza (Chicken):** #2 Profit Driver ($88.00 Gross Profit, 64% margin).
-3. **The Pepperoni Pizza (Classic):** Consistent volume driver ($72.00 Gross Profit).
-4. **The Margherita (Veggie):** Lower dollar profit, but consistent vegetarian staple.
+1. **The Meat Lovers (Supreme):** #1 Profit Driver ($96.00 Gross Profit, 66.2% margin).
+2. **The Pepperoni Pizza (Classic):** #2 Profit Driver ($89.00 Gross Profit, 66.2% margin).
+3. **The BBQ Chicken Pizza (Chicken):** Strong volume contributor ($74.00 Gross Profit, 65.5% margin).
+4. **The Margherita (Veggie):** Highest percentage margin (72.4% margin).
 
 ---
 
-## 4. Strategic Recommendations for Leadership
+## 4. Data Governance & Strategic Recommendations
 
+* **Data Hygiene & Governance:**
+  * Source Validation Gate isolated **2 anomalous POS records** (cancelled/corrupted sync & negative quantity) into `data/quarantine/`.
 * **Marketing & Channel Focus:**
-  * Double down on Downtown Flagship dinner promos (highest margin leverage).
+  * Double down on Downtown Flagship dinner promos.
   * Introduce combo bundling in Suburban Express to lift ticket size toward target.
-* **Menu Engineering:**
-  * Feature **Meat Lovers & BBQ Chicken** prominently on digital delivery menus.
-* **Operational Next Steps:**
-  * Automated weekly ETL sync from SQLite store POS to analytical DuckDB mart.
 """
+
 
 def init_sqlite_pos_database(db_path: str):
     conn = sqlite3.connect(db_path)
@@ -374,7 +568,7 @@ def init_sqlite_pos_database(db_path: str):
     stores_data = [
         (1, "Downtown Flagship", "Jakarta Pusat", "Dine-In & Takeout"),
         (2, "Uptown Mall", "Jakarta Selatan", "Mall Outlet"),
-        (3, "Suburban Express", "Tangerang", "Delivery Only")
+        (3, "Suburban Express", "Tangerang", "Delivery Only"),
     ]
     cur.executemany("INSERT INTO stores VALUES (?, ?, ?, ?)", stores_data)
 
@@ -383,7 +577,7 @@ def init_sqlite_pos_database(db_path: str):
         (1, "Classic"),
         (2, "Supreme"),
         (3, "Chicken"),
-        (4, "Veggie")
+        (4, "Veggie"),
     ]
     cur.executemany("INSERT INTO categories VALUES (?, ?)", cat_data)
 
@@ -396,11 +590,11 @@ def init_sqlite_pos_database(db_path: str):
         (301, "The BBQ Chicken Pizza", 3, 20.00, 6.50),
         (302, "The Buffalo Chicken", 3, 18.00, 6.00),
         (401, "The Margherita", 4, 14.50, 4.00),
-        (402, "The Four Cheese", 4, 16.00, 5.00)
+        (402, "The Four Cheese", 4, 16.00, 5.00),
     ]
     cur.executemany("INSERT INTO menu_items VALUES (?, ?, ?, ?, ?)", menu_data)
 
-    # Insert Orders
+    # Insert 20 Valid Orders + 1 Corrupted/Cancelled Order (9901) to demonstrate Source Validation Quarantine Gate
     orders_data = [
         (1001, "2026-09-01 11:32:00", 1, 501, "Credit Card", "Completed"),
         (1002, "2026-09-01 12:05:00", 1, 502, "Cash", "Completed"),
@@ -421,11 +615,12 @@ def init_sqlite_pos_database(db_path: str):
         (1017, "2026-09-03 12:40:00", 2, 517, "Digital Wallet", "Completed"),
         (1018, "2026-09-03 18:15:00", 1, 518, "Credit Card", "Completed"),
         (1019, "2026-09-03 19:25:00", 3, 519, "Cash", "Completed"),
-        (1020, "2026-09-03 20:10:00", 2, 520, "Digital Wallet", "Completed")
+        (1020, "2026-09-03 20:10:00", 2, 520, "Digital Wallet", "Completed"),
+        (9901, "", 1, 599, "Cash", "Cancelled_Sync_Error"),
     ]
     cur.executemany("INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?)", orders_data)
 
-    # Insert Order Items (with occasional discounts)
+    # Insert 20 Valid Order Items + 1 Invalid Order Item (item_id=99, negative quantity)
     items_data = [
         (1, 1001, 101, 2, 2.00),
         (2, 1002, 202, 1, 0.00),
@@ -446,12 +641,14 @@ def init_sqlite_pos_database(db_path: str):
         (17, 1017, 102, 2, 1.00),
         (18, 1018, 201, 3, 4.00),
         (19, 1019, 101, 2, 0.00),
-        (20, 1020, 302, 1, 0.00)
+        (20, 1020, 302, 1, 0.00),
+        (99, 1001, 101, -2, 0.00),
     ]
     cur.executemany("INSERT INTO order_items VALUES (?, ?, ?, ?, ?)", items_data)
 
     conn.commit()
     conn.close()
+
 
 def scaffold_project(project_name: str, template: str = "restaurant-sales", target_path: str | None = None):
     if target_path:
@@ -471,9 +668,9 @@ def scaffold_project(project_name: str, template: str = "restaurant-sales", targ
     console.print(f"[dim]Destination: {target_dir}[/dim]")
     console.print(f"[dim]Template: {template}[/dim]")
 
-    # Create folder structure
-    os.makedirs(os.path.join(target_dir, "data", "raw"), exist_ok=True)
-    os.makedirs(os.path.join(target_dir, "data", "processed"), exist_ok=True)
+    # Create 7-Stage folder structure
+    for sub in ("raw", "staging", "quarantine", "checkpoints", "processed", "marts"):
+        os.makedirs(os.path.join(target_dir, "data", sub), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "models"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "slides"), exist_ok=True)
 
@@ -522,34 +719,40 @@ def scaffold_project(project_name: str, template: str = "restaurant-sales", targ
         f.write(MARP_PRESENTATION_MD.strip() + "\n")
 
     # 7. Write Comprehensive README
-    readme_content = f"""# {project_name}
+    readme_content = f"""# {os.path.basename(target_dir)}
 
-Data analysis project scaffolded with the **Data Analyst Workbench**.
+Data analysis project scaffolded with the **Data Analyst Workbench** (7-Stage Audited Pipeline).
 
-## Architecture & Data Flow
-1. **OLTP Source:** `data/raw/pos_transactions.db` (Normalized SQLite: stores, categories, menu_items, orders, order_items).
-2. **Targets Ingestion:** `data/raw/branch_targets.csv` (Branch monthly targets).
-3. **ETL Transformation:** `etl.py` (Polars + DuckDB) extracts OLTP, normalizes, calculates margins, and builds OLAP Marts.
-4. **OLAP Storage:** `data/processed/*.parquet` and registered views in `data/analytics.duckdb`.
-5. **Interactive Dashboard:** `reports/` (Evidence.dev) for operations and branch managers.
-6. **Executive Presentation:** `slides/presentation.md` (Marp) for C-Level readouts.
+## 7-Stage Pipeline Architecture
+1. **Sources (`data/raw/`):** SQLite OLTP (`pos_transactions.db`) & CSV/Excel targets (`branch_targets.csv`).
+2. **Extract:** High-speed connectors (`sqlite3`, `polars`, `fastexcel`).
+3. **Staging / Landing (`data/staging/`):** Immutable raw Parquet snapshots.
+4. **Source Validation (`data/quarantine/`):** Pre-flight gate isolating corrupted/invalid rows to `error_log.json` and rejected CSVs.
+5. **Transform (`etl.py`):** Polars cleaning, currency/date hygiene, OBT & dimensional marts (with `.to_pandas()` bridge).
+6. **Target Validation & Load (`data/processed/`, `data/marts/`, `data/analytics.duckdb`):** Automated financial reconciliation before loading into DuckDB & Parquet.
+7. **Business Intelligence & Deliverables:** Evidence.dev dashboard (`reports/`), Marp slides (`slides/`), and SQL models (`models/marts.sql`).
 
 ## Quick Commands
 ```powershell
-# 1. Run the ETL Pipeline (OLTP SQLite -> OLAP DuckDB)
+# 1. Run the 7-Stage ETL Pipeline (or add --interactive to confirm each step)
 analyst run
+analyst run --interactive
 
-# 2. Inspect Raw Data / Targets
+# 2. Inspect Checkpoint Audit Trail (What, Why, How) & Quarantine Log
+analyst checkpoint
+analyst checkpoint --quarantine
+
+# 3. Inspect Raw Data / Targets
 analyst inspect data/raw/pos_transactions.db
 analyst stats data/raw/branch_targets.csv
 
-# 3. Query Analytical Marts
+# 4. Query Analytical Marts
 analyst query models/marts.sql
 
-# 4. Launch BI Dashboard
+# 5. Launch BI Dashboard
 analyst dashboard
 
-# 5. Compile Executive Slides
+# 6. Compile Executive Slides
 analyst slides --format html
 ```
 """
@@ -558,4 +761,4 @@ analyst slides --format html
 
     console.print(f"[bold green][OK] Project '{os.path.basename(target_dir)}' successfully created![/bold green]")
     console.print(f"[cyan]Next step:[/cyan] [yellow]cd \"{target_dir}\"[/yellow]")
-    console.print("[dim]Run 'analyst run' to execute the OLTP -> OLAP ETL pipeline.[/dim]\n")
+    console.print("[dim]Run 'analyst run' to execute the 7-Stage Audited ETL pipeline.[/dim]\n")

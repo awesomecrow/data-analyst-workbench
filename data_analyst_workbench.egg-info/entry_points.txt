@@ -1,3 +1,0 @@
-[console_scripts]
-analyst = workbench.cli:main
-workbench = workbench.cli:main

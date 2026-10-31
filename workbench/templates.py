@@ -8,6 +8,200 @@ from workbench.config import load_config
 
 console = Console()
 
+GENERIC_SEGMENT_TARGETS_CSV = """segment_id,segment_name,monthly_target,target_volume
+1,Corporate,100000.00,500
+2,Small Business,50000.00,300
+3,Consumer,25000.00,200
+"""
+
+GENERIC_DATA_DICTIONARY_MD = """# Data Dictionary & Dual-Engine Pipeline Governance
+
+## 1. Dual-Engine Architecture
+1. **Sources (`data/raw/`):** Heterogeneous data drop zone: SQLite OLTP (`operational.db`), CSV (`*.csv`), Excel (`*.xlsx`), or Parquet (`*.parquet`).
+2. **Auto-Ingest:** Automatically snapshots raw files into `data/staging/*.parquet` and registers tables into DuckDB.
+3. **Quarantine Gate:** Validates business rules, routing anomalies to `data/quarantine/` with audit logs.
+4. **Declarative SQL Modeling (`models/*.sql`):** Pure SQL models transform normalized staging tables into dimensional analytical marts (`data/marts/*.parquet`).
+5. **Reconciliation & Validation:** Financial and row conservation checks before final BI materialization.
+6. **Deliverables:** Zero-cloud interactive BI dashboard (`analyst dashboard`) and executive slide deck (`analyst slides`).
+
+## 2. OLTP Operational Schema (`data/raw/operational.db`)
+* `customers`: `(customer_id INT PK, customer_name TEXT, segment TEXT, region TEXT)`
+* `products`: `(product_id INT PK, product_name TEXT, category TEXT, unit_price REAL)`
+* `orders`: `(order_id INT PK, order_date TEXT, customer_id INT FK, status TEXT)`
+* `order_items`: `(item_id INT PK, order_id INT FK, product_id INT FK, quantity INT, discount REAL)`
+"""
+
+GENERIC_SQL_MODELS_CONTENT = """-- Analytical SQL Models (OLAP)
+-- Materialized automatically to data/marts/*.parquet by: analyst run
+
+-- 1. Segment Revenue & Attainment
+SELECT 
+    c.segment,
+    COUNT(DISTINCT o.order_id) AS total_orders,
+    SUM(oi.quantity) AS total_volume,
+    ROUND(SUM(oi.quantity * p.unit_price * (1.0 - COALESCE(oi.discount, 0.0))), 2) AS total_revenue
+FROM orders o
+JOIN customers c ON o.customer_id = c.customer_id
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN products p ON oi.product_id = p.product_id
+WHERE o.status = 'Completed'
+GROUP BY c.segment
+ORDER BY total_revenue DESC;
+"""
+
+GENERIC_MARP_PRESENTATION_MD = """---
+marp: true
+theme: default
+paginate: true
+header: "📊 Executive Analytics Readout"
+footer: "Confidential - Audited via Data Analyst Workbench (Dual-Engine OLTP/OLAP)"
+style: |
+  section {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    padding: 40px;
+  }
+  h1 { color: #1e3a8a; }
+  h2 { color: #0f172a; }
+  .highlight { color: #16a34a; font-weight: bold; }
+---
+
+# 📊 Executive Business Performance Review
+### Strategic Metric Evaluation & Operational Breakdown
+**Prepared by:** Lead Data Analyst  
+**Pipeline Engine:** Dual-Engine (SQLite OLTP + DuckDB OLAP)
+
+---
+
+## 1. Executive Summary & Topline Scorecard
+
+* **Primary Objective:** Measure core performance indicators against target benchmarks.
+* **Data Foundation:** 100% reconciled from operational source tables to analytical marts.
+* **Key Observations:**
+  * Performance variance across segments and operational cohorts.
+  * Anomalous records and boundary exceptions isolated to audit quarantine.
+
+---
+
+## 2. Segment & Dimensional Performance
+
+| Segment / Category | Volume | Total Value ($) | Realization / Target % | Efficiency Score |
+| :--- | :--- | :--- | :--- | :--- |
+| **Segment A** | 1,250 | $124,500.00 | **94.2%** | **High** |
+| **Segment B** | 890 | $88,200.00 | **88.5%** | **Medium** |
+| **Segment C** | 420 | $39,800.00 | **72.1%** | **Underperforming** |
+
+*Segment A delivers primary volume; Segment C requires operational turnaround.*
+
+---
+
+## 3. Operational Bottlenecks & Exceptions
+
+1. **Cycle Time Distribution:** Peak turnaround times observed during high-velocity windows.
+2. **Exception Handling:** Boundary rules successfully quarantined invalid status transitions.
+3. **Cohort Stability:** Maturity cohorts reveal consistent resolution within contractual SLAs.
+
+---
+
+## 4. Strategic Recommendations & Action Plan
+
+* **Immediate Actions (Week 1-2):**
+  * Address top bottlenecks identified in low-performing segments.
+  * Implement automated daily reconciliation alerts.
+* **Medium-Term Strategy (Month 1-3):**
+  * Reallocate resources to high-attainment channels.
+  * Expand analytical mart dimensions for deeper cohort tracking.
+"""
+
+GENERIC_EVIDENCE_DASHBOARD_MD = """# 📊 Executive Business Analytics Dashboard
+
+### Topline Performance Indicators
+
+{% big_value data="segment_attainment" value="sum(total_revenue)" title="Total Net Revenue" fmt="usd" /%}
+{% big_value data="segment_attainment" value="sum(total_volume)" title="Total Units Sold" /%}
+{% big_value data="segment_attainment" value="sum(total_orders)" title="Verified Orders" /%}
+
+---
+
+### Segment Revenue Contribution
+
+{% bar_chart 
+  data="segment_attainment" 
+  x="segment" 
+  y="total_revenue" 
+  title="Realized Revenue by Segment ($)"
+/%}
+
+---
+
+### Segment Performance Table
+
+{% table data="segment_attainment" /%}
+"""
+
+def init_generic_sqlite_database(db_path: str):
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE customers (
+        customer_id INTEGER PRIMARY KEY,
+        customer_name TEXT,
+        segment TEXT,
+        region TEXT
+    );
+    """)
+    cur.execute("""
+    CREATE TABLE products (
+        product_id INTEGER PRIMARY KEY,
+        product_name TEXT,
+        category TEXT,
+        unit_price REAL
+    );
+    """)
+    cur.execute("""
+    CREATE TABLE orders (
+        order_id INTEGER PRIMARY KEY,
+        order_date TEXT,
+        customer_id INTEGER REFERENCES customers(customer_id),
+        status TEXT
+    );
+    """)
+    cur.execute("""
+    CREATE TABLE order_items (
+        item_id INTEGER PRIMARY KEY,
+        order_id INTEGER REFERENCES orders(order_id),
+        product_id INTEGER REFERENCES products(product_id),
+        quantity INTEGER,
+        discount REAL
+    );
+    """)
+
+    cur.executemany("INSERT INTO customers VALUES (?, ?, ?, ?)", [
+        (1, "Acme Corp", "Corporate", "North America"),
+        (2, "Beta Retail", "Small Business", "Europe"),
+        (3, "Delta Logistics", "Corporate", "Asia Pacific"),
+        (4, "John Doe", "Consumer", "North America"),
+    ])
+    cur.executemany("INSERT INTO products VALUES (?, ?, ?, ?)", [
+        (101, "Enterprise Suite", "Software", 1200.00),
+        (102, "Standard License", "Software", 450.00),
+        (201, "Hardware Gateway", "Hardware", 850.00),
+        (301, "Consulting Hours", "Services", 150.00),
+    ])
+    cur.executemany("INSERT INTO orders VALUES (?, ?, ?, ?)", [
+        (1001, "2026-06-01", 1, "Completed"),
+        (1002, "2026-06-02", 2, "Completed"),
+        (1003, "2026-06-03", 3, "Completed"),
+        (1004, "2026-06-04", 4, "Completed"),
+    ])
+    cur.executemany("INSERT INTO order_items VALUES (?, ?, ?, ?, ?)", [
+        (1, 1001, 101, 2, 0.10),
+        (2, 1002, 102, 5, 0.05),
+        (3, 1003, 201, 3, 0.00),
+        (4, 1004, 301, 10, 0.00),
+    ])
+    conn.commit()
+    conn.close()
+
 BRANCH_TARGETS_CSV = """store_id,store_name,monthly_target,target_volume
 1,Downtown Flagship,600.00,35
 2,Uptown Mall,450.00,25
@@ -650,7 +844,7 @@ def init_sqlite_pos_database(db_path: str):
     conn.close()
 
 
-def scaffold_project(project_name: str, template: str = "restaurant-sales", target_path: str | None = None):
+def scaffold_project(project_name: str, template: str = "generic", target_path: str | None = None):
     if target_path:
         target_dir = os.path.abspath(os.path.join(target_path, project_name))
     elif os.path.isabs(project_name) or project_name.startswith(".") or project_name.startswith("/") or project_name.startswith("\\"):
@@ -674,28 +868,39 @@ def scaffold_project(project_name: str, template: str = "restaurant-sales", targ
     os.makedirs(os.path.join(target_dir, "models"), exist_ok=True)
     os.makedirs(os.path.join(target_dir, "slides"), exist_ok=True)
 
+    is_restaurant = (template == "restaurant-sales")
+
     # 1. Initialize SQLite OLTP Database
-    sqlite_db_path = os.path.join(target_dir, "data", "raw", "pos_transactions.db")
-    init_sqlite_pos_database(sqlite_db_path)
+    if is_restaurant:
+        sqlite_db_path = os.path.join(target_dir, "data", "raw", "pos_transactions.db")
+        init_sqlite_pos_database(sqlite_db_path)
+    else:
+        sqlite_db_path = os.path.join(target_dir, "data", "raw", "operational.db")
+        init_generic_sqlite_database(sqlite_db_path)
 
     # 2. Write CSV Targets
-    targets_csv_path = os.path.join(target_dir, "data", "raw", "branch_targets.csv")
+    targets_csv_name = "branch_targets.csv" if is_restaurant else "segment_targets.csv"
+    targets_content = BRANCH_TARGETS_CSV if is_restaurant else GENERIC_SEGMENT_TARGETS_CSV
+    targets_csv_path = os.path.join(target_dir, "data", "raw", targets_csv_name)
     with open(targets_csv_path, "w", encoding="utf-8") as f:
-        f.write(BRANCH_TARGETS_CSV.strip() + "\n")
+        f.write(targets_content.strip() + "\n")
 
     # 3. Write Data Dictionary & SQL Models
+    dict_content = DATA_DICTIONARY_MD if is_restaurant else GENERIC_DATA_DICTIONARY_MD
     dict_path = os.path.join(target_dir, "models", "data_dictionary.md")
     with open(dict_path, "w", encoding="utf-8") as f:
-        f.write(DATA_DICTIONARY_MD.strip() + "\n")
+        f.write(dict_content.strip() + "\n")
 
+    sql_content = SQL_MODELS_CONTENT if is_restaurant else GENERIC_SQL_MODELS_CONTENT
     sql_path = os.path.join(target_dir, "models", "marts.sql")
     with open(sql_path, "w", encoding="utf-8") as f:
-        f.write(SQL_MODELS_CONTENT.strip() + "\n")
+        f.write(sql_content.strip() + "\n")
 
-    # 4. Write ETL Pipeline Script
-    etl_path = os.path.join(target_dir, "etl.py")
-    with open(etl_path, "w", encoding="utf-8") as f:
-        f.write(ETL_PIPELINE_SCRIPT.strip() + "\n")
+    # 4. Write ETL Pipeline Script if restaurant template
+    if is_restaurant:
+        etl_path = os.path.join(target_dir, "etl.py")
+        with open(etl_path, "w", encoding="utf-8") as f:
+            f.write(ETL_PIPELINE_SCRIPT.strip() + "\n")
 
     # 5. Scaffold Evidence Dashboard inside reports/
     reports_dir = os.path.join(target_dir, "reports")
@@ -710,13 +915,15 @@ def scaffold_project(project_name: str, template: str = "restaurant-sales", targ
 
     pages_dir = os.path.join(reports_dir, "pages")
     os.makedirs(pages_dir, exist_ok=True)
+    home_content = EVIDENCE_DASHBOARD_MD if is_restaurant else GENERIC_EVIDENCE_DASHBOARD_MD
     with open(os.path.join(pages_dir, "home.md"), "w", encoding="utf-8") as f:
-        f.write(EVIDENCE_DASHBOARD_MD.strip() + "\n")
+        f.write(home_content.strip() + "\n")
 
     # 6. Write Marp Presentation Deck
+    marp_content = MARP_PRESENTATION_MD if is_restaurant else GENERIC_MARP_PRESENTATION_MD
     marp_path = os.path.join(target_dir, "slides", "presentation.md")
     with open(marp_path, "w", encoding="utf-8") as f:
-        f.write(MARP_PRESENTATION_MD.strip() + "\n")
+        f.write(marp_content.strip() + "\n")
 
     # 7. Write Comprehensive README
     readme_content = f"""# {os.path.basename(target_dir)}

@@ -14,34 +14,62 @@ from workbench.config import print_config, set_config_value, load_config
 from workbench.registry import list_projects
 from workbench.ai import ask_ai
 from workbench.checkpoint import show_checkpoint
+from workbench.oltp import run_oltp_query
+from workbench.engine import auto_ingest, execute_sql_models, run_dual_engine_pipeline
 
 console = Console()
 
 def run_etl(interactive: bool = False):
     if os.path.exists("etl.py"):
-        console.print("[cyan]Executing 7-Stage ETL pipeline (etl.py)...[/cyan]")
+        console.print("[cyan]Executing custom 7-Stage ETL pipeline (etl.py)...[/cyan]")
         cmd = [sys.executable, "etl.py"]
         if interactive:
             cmd.append("--interactive")
         subprocess.run(cmd)
     else:
-        console.print("[yellow]No etl.py script found in current directory.[/yellow]")
+        console.print("[cyan]No custom etl.py found. Running declarative Dual-Engine pipeline...[/cyan]")
+        run_dual_engine_pipeline(interactive=interactive)
 
-def launch_dashboard(port: int = 3000):
+def launch_dashboard(port: int = 3000, force_evidence: bool = False):
     reports_dir = "reports"
-    if not os.path.exists(reports_dir):
-        console.print("[bold red]No 'reports/' directory found in current project.[/bold red]")
+    os.makedirs(reports_dir, exist_ok=True)
+
+    if force_evidence:
+        evidence_cli = shutil.which("evidence") or shutil.which("evd")
+        if not evidence_cli:
+            console.print("[bold red]Evidence CLI not found in PATH.[/bold red]")
+            return
+        console.print(f"[bold green]Starting Evidence BI Dashboard on port {port}...[/bold green]")
+        try:
+            subprocess.run([evidence_cli, "dev", "--port", str(port)], cwd=reports_dir, shell=True)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Dashboard server stopped.[/yellow]")
         return
 
-    evidence_cli = shutil.which("evidence") or shutil.which("evd")
-    if not evidence_cli:
-        console.print("[bold red]Evidence CLI not found in PATH.[/bold red]")
-        return
+    # Generate or refresh interactive standalone dashboard
+    from workbench.report_gen import generate_interactive_dashboard
+    console.print(f"[cyan]Compiling data-driven interactive BI dashboard...[/cyan]")
+    dash_path = generate_interactive_dashboard()
+    console.print(f"[bold green][OK] Dashboard compiled to {dash_path}[/bold green]")
+    console.print(f"[bold green]Serving interactive dashboard at http://localhost:{port}...[/bold green]")
+    console.print(f"[dim](Pass --evidence to launch Evidence Studio dev server instead)[/dim]")
 
-    console.print(f"[bold green]Starting Evidence BI Dashboard on port {port}...[/bold green]")
-    console.print(f"[dim]Project dir: {os.path.abspath(reports_dir)}[/dim]")
+    import http.server
+    import socketserver
+    import webbrowser
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=reports_dir, **kwargs)
+
     try:
-        subprocess.run([evidence_cli, "dev", "--port", str(port)], cwd=reports_dir, shell=True)
+        webbrowser.open(f"http://localhost:{port}/index.html")
+    except Exception:
+        pass
+
+    try:
+        with socketserver.TCPServer(("", port), Handler) as httpd:
+            httpd.serve_forever()
     except KeyboardInterrupt:
         console.print("\n[yellow]Dashboard server stopped.[/yellow]")
 
@@ -96,11 +124,11 @@ def main():
     new_parser = subparsers.add_parser("new", help="Create a new context-specific analytics project")
     new_parser.add_argument("name", help="Name of the new project directory (or relative/absolute path)")
     new_parser.add_argument("--path", "-p", default=None, help="Target destination directory where the project folder will be created")
-    new_parser.add_argument("--template", "-t", default="restaurant-sales", help="Project template (default: restaurant-sales)")
+    new_parser.add_argument("--template", "-t", default="generic", help="Project template (default: generic, or 'restaurant-sales')")
 
     # ask (AI)
     ask_parser = subparsers.add_parser("ask", help="Ask AI a natural language question about your dataset/database")
-    ask_parser.add_argument("question", help="Question in plain English (e.g. 'Which pizzas had the lowest margin?')")
+    ask_parser.add_argument("question", help="Question in plain English (e.g. 'Which segments had the lowest performance?')")
     ask_parser.add_argument("--db", default="data/analytics.duckdb", help="Path to DuckDB database")
 
     # inspect
@@ -110,6 +138,18 @@ def main():
     # stats
     stats_parser = subparsers.add_parser("stats", help="Display schema, null profile, and terminal charts with Polars & Plotext")
     stats_parser.add_argument("file", help="File path to profile (CSV, Parquet, JSON)")
+
+    # oltp
+    oltp_parser = subparsers.add_parser("oltp", help="Execute query or inspect schema on SQLite OLTP database")
+    oltp_parser.add_argument("sql", nargs="?", default=None, help="SQL query string or path to .sql file (opens interactive shell if omitted)")
+    oltp_parser.add_argument("--db", default=None, help="Path to SQLite database (defaults to data/raw/*.db)")
+    oltp_parser.add_argument("--schema", "-s", action="store_true", help="Inspect normalized 3NF schema, tables, and foreign keys")
+
+    # ingest
+    ingest_parser = subparsers.add_parser("ingest", help="Zero-code auto-ingest CSV, Excel, Parquet, and SQLite into Staging & DuckDB")
+    ingest_parser.add_argument("--raw", default="data/raw", help="Directory containing raw data files")
+    ingest_parser.add_argument("--staging", default="data/staging", help="Target directory for staging Parquet files")
+    ingest_parser.add_argument("--db", default="data/analytics.duckdb", help="Path to DuckDB database")
 
     # query
     query_parser = subparsers.add_parser("query", help="Run DuckDB query or SQL file and display styled Rich table")
@@ -127,8 +167,9 @@ def main():
     cp_parser.add_argument("--run-id", default=None, help="Inspect a specific historical run ID")
 
     # dashboard
-    dash_parser = subparsers.add_parser("dashboard", help="Start the Evidence.dev BI dashboard server")
+    dash_parser = subparsers.add_parser("dashboard", help="Start the interactive data-driven BI dashboard (or Evidence Studio)")
     dash_parser.add_argument("--port", "-p", type=int, default=3000, help="Port to serve dashboard on")
+    dash_parser.add_argument("--evidence", "-e", action="store_true", help="Launch Evidence Studio dev server instead of local offline dashboard")
 
     # slides
     slides_parser = subparsers.add_parser("slides", help="Compile Marp presentation deck to HTML or PDF")
@@ -161,6 +202,10 @@ def main():
         inspect_data(args.file)
     elif args.command == "stats":
         show_stats(args.file)
+    elif args.command == "oltp":
+        run_oltp_query(args.sql, custom_db=args.db, show_schema=args.schema)
+    elif args.command == "ingest":
+        auto_ingest(raw_dir=args.raw, staging_dir=args.staging, duckdb_path=args.db)
     elif args.command == "query":
         run_query(args.sql, args.db)
     elif args.command == "run":
@@ -168,7 +213,7 @@ def main():
     elif args.command == "checkpoint":
         show_checkpoint(list_runs=args.list, show_quarantine=args.quarantine, run_id=args.run_id)
     elif args.command == "dashboard":
-        launch_dashboard(args.port)
+        launch_dashboard(args.port, force_evidence=args.evidence)
     elif args.command == "slides":
         compile_slides(args.format)
 

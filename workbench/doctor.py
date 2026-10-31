@@ -56,6 +56,7 @@ def run_doctor():
     # CLI tools
     cli_tools = [
         ("duckdb", "OLAP Database CLI", "duckdb"),
+        ("sqlite3", "OLTP Database CLI", "sqlite3"),
         ("visidata (vd)", "Interactive Data TUI", "vd"),
         ("marp", "Markdown Slide Generator", "marp"),
         ("evidence", "BI Dashboard Engine", "evidence"),

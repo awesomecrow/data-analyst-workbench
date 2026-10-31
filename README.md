@@ -5,7 +5,17 @@
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-7--Stage%20Audited%20ETL-green.svg)](#-7-stage-audited-pipeline-architecture)
 
-A fast, open-source, and context-aware CLI toolkit tailored for professional Data Analysts. It implements a resilient **7-Stage Audited ETL Pipeline** with an integrated **Checkpoint & Quarantine Audit Engine (`What`, `Why`, `How`)**—unifying local terminal data exploration, OLTP-to-OLAP dimensional modeling, interactive web BI dashboards, and stakeholder presentations into a single command workflow.
+A fast, open-source, and context-aware CLI toolkit tailored for professional Data Analysts. It features a true **Dual-Engine Architecture (SQLite OLTP + DuckDB OLAP)** and implements a resilient **7-Stage Audited ETL Pipeline** with an integrated **Checkpoint & Quarantine Audit Engine (`What`, `Why`, `How`)**—unifying local terminal data exploration, zero-code auto-ingest, OLTP-to-OLAP dimensional modeling, living web BI dashboards, and stakeholder presentations into a single command workflow.
+
+---
+
+## ⚡ The Dual-Engine Advantage
+
+Traditional analytics workflows force a false choice: either run heavy operational databases that crawl on analytical queries, or jump straight to OLAP engines without transactional fidelity. The **Data Analyst Workbench** bridges both:
+
+* **OLTP Engine (Row-Based Relational / SQLite):** Powered by SQLite (`analyst oltp`). Inspect 3NF normalized tables, check primary/foreign keys, test transactional integrity, and run operational queries without running a heavy database daemon.
+* **OLAP Engine (Columnar Vectorized / DuckDB):** Powered by DuckDB (`analyst query`). Run sub-second analytical window functions, percentiles, cohort aggregations, and query Parquet files directly.
+* **The Bridge (`analyst ingest` & `models/*.sql`):** Auto-discovers any combination of CSVs, Excel sheets, Parquet files, and SQLite databases in `data/raw/`, snapshots them to immutable `data/staging/*.parquet`, and executes declarative SQL models into `data/marts/*.parquet`. Zero boilerplate Python required.
 
 ---
 
@@ -89,7 +99,26 @@ quarterly_performance/data/raw/
 ```
 > **Best Practice:** Keep raw files immutable. Do not edit them manually so you always maintain an untouched source of truth.
 
-### 3. Inspect & Audit Raw Data in Terminal
+### 3. Explore Operational Data (OLTP Engine)
+Inspect normalized 3NF schemas, foreign keys, and run transactional queries:
+```powershell
+# Inspect 3NF schema, primary keys, and foreign keys
+analyst oltp --schema
+
+# Execute a query against operational database
+analyst oltp "SELECT customer_id, region FROM customers LIMIT 5;"
+
+# Launch interactive SQLite shell
+analyst oltp
+```
+
+### 4. Zero-Code Auto-Ingest
+Discover all CSV, Excel, Parquet, and SQLite files in `data/raw/` and mount them instantly:
+```powershell
+analyst ingest
+```
+
+### 5. Inspect & Audit Raw Data in Terminal
 Open and profile any raw dataset directly in your terminal before running transformations:
 ```powershell
 # Open interactive terminal spreadsheet (VisiData)
@@ -99,8 +128,8 @@ analyst inspect data/raw/transactions.xlsx
 analyst stats data/raw/transactions.xlsx
 ```
 
-### 4. Execute the 7-Stage Audited ETL Pipeline
-Run the transformation pipeline with automated audit logging:
+### 6. Execute the 7-Stage Audited Pipeline
+Run the transformation pipeline (auto-executes custom `etl.py` or declarative `models/*.sql`):
 ```powershell
 # Standard execution
 analyst run
@@ -109,7 +138,7 @@ analyst run
 analyst run --interactive
 ```
 
-### 5. Inspect Audit Checkpoints & Quarantine Logs
+### 7. Inspect Audit Checkpoints & Quarantine Logs
 Inspect what happened during data processing without guessing:
 ```powershell
 # View latest stage-by-stage What, Why, How audit report
@@ -122,7 +151,7 @@ analyst checkpoint --quarantine
 analyst checkpoint --list
 ```
 
-### 6. Query Analytical Marts with SQL
+### 8. Query Analytical Marts with SQL (OLAP Engine)
 Execute fast analytical SQL queries against local DuckDB marts:
 ```powershell
 # Execute analytical model file
@@ -132,13 +161,16 @@ analyst query models/marts.sql
 analyst query "SELECT * FROM mart_store_performance LIMIT 5;"
 ```
 
-### 7. Generate Stakeholder Deliverables
+### 9. Generate Stakeholder Deliverables
 
-#### Interactive Web BI Dashboard (Evidence.dev)
+#### Interactive Web BI Dashboard
 ```powershell
+# Launch 100% offline interactive BI dashboard (ECharts + DataTables on http://localhost:3000)
 analyst dashboard
+
+# Or launch Evidence Studio dev server (if configured):
+analyst dashboard --evidence
 ```
-Open `http://localhost:3000` to interact with KPI cards, bar charts, and data tables.
 
 #### Executive Presentation Slide Deck (Marp)
 ```powershell

@@ -1,59 +1,57 @@
 ---
 name: data-analyst-workbench
-description: End-to-end data analyst workbench CLI implementing a 7-stage audited pipeline (Sources -> Extract -> Staging -> Source Validation/Quarantine -> Transform -> Target Validation/Load -> Business Intelligence) with Checkpoint Engine (What, Why, How), connecting DuckDB, SQLite, Polars, Pandas, Excel, VisiData, Plotext, Rich, Evidence.dev, and Marp.
+description: End-to-end data analyst workbench CLI implementing a Dual-Engine architecture (SQLite OLTP + DuckDB OLAP) and an audited 7-stage pipeline (Sources -> Extract -> Staging -> Source Validation/Quarantine -> Transform -> Target Validation/Load -> Business Intelligence) with Checkpoint Engine (What, Why, How), connecting DuckDB, SQLite, Polars, Pandas, Excel, VisiData, Plotext, Rich, Evidence.dev, and Marp.
 ---
 
-# Data Analyst Workbench Skill
+# Data Analyst Workbench Skill (Dual-Engine OLTP & OLAP)
 
-The **Data Analyst Workbench** is a lightweight, code-first, audited analytics toolkit designed for professional data analysts. It integrates open-source analytics engines into a unified CLI workflow (`analyst` / `workbench`):
+The **Data Analyst Workbench** is a lightweight, code-first, audited analytics workbench designed for professional data analysts. It bridges transactional operational databases with vectorized analytical data warehouses:
 
-- **DuckDB:** Embedded high-performance OLAP SQL database engine.
-- **SQLite (`sqlite3`):** Row-oriented OLTP database engine for operational transaction ingestion.
-- **Polars (Core) & Pandas (Interop Bridge):** Blazing-fast in-memory DataFrame transformations with zero-copy `.to_pandas()` interoperability.
-- **Excel Engine (`openpyxl` & `fastexcel`):** Multi-sheet Excel (`.xlsx`, `.xls`) parsing and data hygiene.
-- **Checkpoint & Quarantine Audit Engine:** Stage-by-stage transparency recording **What**, **Why**, and **How** at every transition, plus automated exception quarantine (`data/quarantine/error_log.json`).
-- **VisiData (`vd`):** Terminal spreadsheet for interactive cell auditing.
-- **Plotext & Rich:** Terminal ASCII/Unicode charting, styled tables, and schema profiling.
-- **Evidence.dev:** Markdown + SQL interactive web BI dashboards.
-- **Marp:** Markdown to executive presentation slides (HTML/PDF).
+- **OLTP Engine (Row-Based / 3NF Relational):** Powered by **SQLite (`sqlite3`)** via `analyst oltp`. Provides normalized schema inspection, foreign key tracking, transactional queries, and raw state exploration.
+- **OLAP Engine (Columnar / Vectorized):** Powered by **DuckDB** via `analyst query`. Provides sub-second analytical aggregations, dimensional marts, and Parquet scanning.
+- **The Zero-Code Ingestion Bridge (`analyst ingest`):** Auto-discovers heterogeneous raw files (CSV, Excel, Parquet, SQLite) in `data/raw/`, snapshots them to immutable `data/staging/*.parquet`, and mounts them instantly into DuckDB.
+- **Declarative SQL-First Modeling (`models/*.sql`):** Eliminates procedural Python glue code. Analysts write clean SQL transformations that `analyst run` automatically executes into `data/marts/*.parquet`.
+- **Data Hygiene & Quarantine Gate:** Isolates anomalies to `data/quarantine/` (`error_log.json` and CSVs) with explicit reasoning.
+- **Checkpoint Audit Trail Engine:** Automatically captures **What, Why, and How** across every stage (`analyst checkpoint`).
+- **Interactive Offline BI Dashboard (`analyst dashboard`):** Instant, 100% offline executive dashboard with ECharts and searchable DataTables bound directly to DuckDB marts (with optional Evidence Studio support via `--evidence`).
+- **Executive Slides (`analyst slides`):** Compiles Marp markdown decks directly into standalone HTML and PDF readouts.
+- **Terminal TUI & Profiling:** Interactive spreadsheet auditing via **VisiData (`vd`)** and terminal charting via **Plotext** and **Rich**.
 
 ---
 
-## 7-Stage Audited Pipeline Architecture
-
-Every project follows a strict, resilient 7-stage data engineering & analytics workflow:
+## 7-Stage Dual-Engine Pipeline Architecture
 
 ```
-[ 1. SOURCES ] (SQLite OLTP, Excel/CSV, JSON, Laravel MySQL/Postgres, n8n Inbound)
+[ 1. SOURCES (OLTP & Files) ] (SQLite operational.db, CSV, Excel, MySQL snapshot)
+       │
+       ▼ (Zero-Code Auto-Ingest: analyst ingest)
+[ 2. EXTRACT & STAGING ] ────► Checkpoint 1: Immutable Snappy Parquet in data/staging/
        │
        ▼
-[ 2. EXTRACT ] ────────────────► Checkpoint 1 (What, Why, How)
-       │
-       ▼
-[ 3. STAGING / LANDING ] ──────► Checkpoint 2 (Immutable Raw Parquet in data/staging/)
-       │
-       ▼
-[ 4. SOURCE VALIDATION ] ──────► Checkpoint 3 (Gate 1: Validasi Awal)
+[ 3. SOURCE VALIDATION ] ────► Checkpoint 2: Gate 1 Pre-Flight Rules (BR-04, BR-10)
   ├── PASSED ──► Continue
-  └── FAILED ──► Quarantine / Exception Log (data/quarantine/error_log.json & CSV)
+  └── FAILED ──► Quarantine Log (data/quarantine/error_log.json & CSV)
+       │
+       ▼ (Declarative SQL-First: models/*.sql or custom etl.py)
+[ 4. SEMANTIC TRANSFORM ] ───► Checkpoint 3: Dimensional Marts & OBT Tables
        │
        ▼
-[ 5. TRANSFORM ] ──────────────► Checkpoint 4 (Polars Hygiene, Joins, OBT & Star Marts)
+[ 5. TARGET VALIDATION ] ────► Checkpoint 4: Gate 2 Reconciliation & Assertions
        │
        ▼
-[ 6. TARGET VALIDATION & LOAD ]► Checkpoint 5 & 6 (Gate 2: Reconciliation -> DuckDB & Parquet)
+[ 6. OLAP MART SERVING ] ────► Checkpoint 5: DuckDB Views & data/marts/*.parquet
        │
        ▼
-[ 7. BUSINESS INTELLIGENCE ] ──► Evidence.dev Web BI, Marp Slides, DuckDB SQL Models
+[ 7. DELIVERABLES ] ─────────► analyst dashboard (Offline BI) & analyst slides (Marp)
 ```
 
 ---
 
 ## Core CLI Workflows
 
-### 1. Portfolio Management & Health
+### 1. Portfolio Health & Environment
 ```powershell
-# Health check of all integrated Python & CLI tools
+# Health check of both OLTP (SQLite) and OLAP (DuckDB) engines and tools
 analyst doctor
 
 # Track all projects in portfolio
@@ -62,109 +60,109 @@ analyst list
 # Manage workbench defaults (project folder, AI API key)
 analyst config
 analyst config --set-dir "C:\Projects\data_analyst"
-analyst config --set-key "<API_KEY>"
 ```
 
 ### 2. Project Scaffolding
 ```powershell
-# Scaffold into default projects folder
-analyst new pizza-sales --template restaurant-sales
+# Scaffold clean, generic Dual-Engine project (default)
+analyst new my_analytics_project
 
-# Scaffold to a custom path
-analyst new mokopi-analytics --path "C:\Projects\data_analyst"
+# Scaffold to a custom directory path
+analyst new swift_route_analytics --path "C:\Projects\data_analyst"
+
+# Scaffold demo restaurant template with sample transactions
+analyst new pizza_sales --template restaurant-sales
 ```
 
-Project layout created:
-```
-<project-name>/
-├── data/
-│   ├── raw/                 <- Source SQLite (.db), Excel (.xlsx), CSV, JSON
-│   ├── staging/             <- Immutable raw Parquet landing snapshots
-│   ├── quarantine/          <- Rejected rows CSV & error_log.json (Exception Log)
-│   ├── checkpoints/         <- Audit manifests (run_latest.json & history)
-│   ├── processed/ & marts/  <- Cleaned analytical Parquet marts
-│   └── analytics.duckdb     <- Persistent DuckDB OLAP database
-├── models/
-│   ├── data_dictionary.md   <- Governance, schema & business metric definitions
-│   └── marts.sql            <- Analytical SQL models
-├── etl.py                   <- 7-Stage Polars & DuckDB audited ETL pipeline
-├── reports/                 <- Evidence.dev interactive BI dashboard
-│   ├── evidence.config.yaml
-│   └── pages/home.md        <- Dashboard pages (Markdown + SQL)
-├── slides/
-│   └── presentation.md      <- Marp stakeholder slide deck
-└── README.md
-```
-
-### 3. Data Hygiene & Profiling
+### 3. OLTP Operational Engine (Row-Based / SQLite)
 ```powershell
-# Interactive spreadsheet audit (VisiData) - supports CSV, Excel, SQLite, Parquet
-analyst inspect data/raw/pos_transactions.db
-analyst inspect data/raw/branch_targets.csv
+# Inspect normalized 3NF relational schema, primary keys, and foreign keys
+analyst oltp --schema
 
-# Schema profile, null checks & terminal histogram (Polars + Plotext)
-analyst stats data/raw/branch_targets.csv
-analyst stats data/raw/pos_transactions.db
+# Execute a transactional or operational query against SQLite
+analyst oltp "SELECT customer_name, region FROM customers LIMIT 10;"
+
+# Launch interactive SQLite shell
+analyst oltp
 ```
 
-### 4. Audited ETL Execution & Checkpoints (What, Why, How)
+### 4. Zero-Code Auto-Ingestion
 ```powershell
-# Execute the 7-Stage ETL pipeline
+# Ingest all CSV, Excel, Parquet, and SQLite tables in data/raw/
+# Snapshots to data/staging/*.parquet and mounts tables into DuckDB
+analyst ingest
+```
+
+### 5. Audited Pipeline Execution & Checkpoints (What, Why, How)
+```powershell
+# Run the pipeline (executes custom etl.py if present, or declarative SQL models in models/*.sql)
 analyst run
 
-# Execute interactively (pauses at each checkpoint for user confirmation)
+# Run interactively (pauses at each checkpoint for analyst confirmation)
 analyst run --interactive
 
-# Inspect latest checkpoint report (What, Why, How table)
+# View latest checkpoint audit trail (What, Why, How table)
 analyst checkpoint
 
-# Inspect quarantined / rejected records log
+# Inspect quarantined records log (failed business assertions)
 analyst checkpoint --quarantine
 
-# List historical checkpoint runs
+# View checkpoint run history
 analyst checkpoint --list
 ```
 
-### 5. Analytical SQL Querying
+### 6. OLAP Vector Querying (DuckDB)
 ```powershell
-# Run ad-hoc SQL query against DuckDB
-analyst query "SELECT * FROM mart_store_performance;"
+# Query materialized analytical marts inside DuckDB
+analyst query "SELECT * FROM mart_hub_performance ORDER BY on_time_rate_pct DESC;"
 
-# Execute a SQL model file
+# Run analytical SQL model file
 analyst query models/marts.sql
+
+# Launch interactive DuckDB shell
+analyst query
 ```
 
-### 6. Stakeholder Deliverables (Dashboards & Slides)
+### 7. Data Exploration & Terminal Profiling
 ```powershell
-# Launch local Evidence.dev BI dashboard server (http://localhost:3000)
+# Interactive spreadsheet audit in terminal (VisiData)
+analyst inspect data/raw/operational.db
+analyst inspect data/staging/shipments.parquet
+
+# Statistical schema profiling, null counts & terminal charts (Polars + Plotext)
+analyst stats data/raw/shipments.csv
+```
+
+### 8. Living Deliverables (Dashboards & Slides)
+```powershell
+# Launch 100% offline interactive BI dashboard (ECharts + DataTables on http://localhost:3000)
 analyst dashboard
 
-# Compile Marp executive slides to HTML or PDF
+# Launch on a custom port
+analyst dashboard --port 8080
+
+# Launch Evidence Studio dev server (requires Evidence Studio login / warehouse)
+analyst dashboard --evidence
+
+# Compile executive presentation slides via Marp
 analyst slides --format html
 analyst slides --format pdf
 ```
 
-### 7. In-Terminal AI Co-Pilot
+### 9. Natural Language AI Co-Pilot
 ```powershell
 # Ask questions in plain English; AI writes SQL, runs it, and provides takeaways
-analyst ask "Which item had the highest gross profit and margin percentage?"
+analyst ask "Which hub had the lowest on-time delivery rate and why?"
 ```
-
----
-
-## Upstream Ecosystem Integration (Laravel, n8n, Pandas)
-
-1. **Laravel / Operational RDBMS (Upstream Source):**
-   - Connect directly from `etl.py` or DuckDB using native database connectors (`ATTACH 'host=... dbname=laravel' AS app_db (TYPE MYSQL)` or `pl.read_database()`). Never install PHP/Laravel inside the analytics CLI.
-2. **n8n Workflow Automation (Upstream Dispatcher):**
-   - Use n8n externally to fetch branch Excel files from Telegram/Email/Google Drive into `data/raw/`, then trigger `analyst run` and `analyst slides --format pdf` via CLI command execution node.
-3. **Pandas Interoperability:**
-   - Use Polars for fast core ETL, and invoke `.to_pandas()` whenever scikit-learn, statsmodels, or legacy Pandas functions are needed.
 
 ---
 
 ## Guidelines for Agents Using This Skill
 
-1. **Always verify checkpoints:** After running `analyst run`, inspect `analyst checkpoint` (or `data/checkpoints/run_latest.json`) to report exact row counts, quarantined anomalies, and reconciliation status to the user.
-2. **Never silently drop data:** In custom `etl.py` modifications, route invalid rows to `data/quarantine/` using `tracker.log_quarantine(...)` and record **What, Why, How** via `tracker.record_stage(...)`.
-3. **Verify before querying:** Run `analyst stats <file>` to inspect column types and nulls before formulating complex SQL joins or models.
+1. **Dual-Engine Division of Labor:**
+   - Use `analyst oltp` for operational entities, transaction logs, and 3NF normalization.
+   - Use `analyst query` for analytical questions, cohort metrics, percentiles, and SLA scorecards.
+2. **Zero-Code First:** Drop raw files into `data/raw/` and run `analyst ingest` before writing any procedural python code.
+3. **Always verify checkpoints:** Run `analyst checkpoint` after pipeline execution to confirm row conservation and quarantine logs.
+4. **Never silently drop rows:** Offending rows must route to `data/quarantine/` with an audit reason logged in `error_log.json`.
+5. **Living deliverables over static text:** Always recompile slides (`analyst slides`) and regenerate dashboards (`analyst dashboard`) when data changes.

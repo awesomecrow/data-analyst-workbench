@@ -173,11 +173,13 @@ def execute_sql_models(models_dir: str = "models", marts_dir: str = "data/marts"
         try:
             # If the SQL is multiple statements or a raw query, wrap or execute
             # Check if user already provided CREATE TABLE / VIEW or a SELECT
-            cleaned_sql = sql_content.rstrip(";").strip()
-            
-            # If it's a SELECT statement, materialize it as a table and export to Parquet
-            if cleaned_sql.lower().startswith("select") or cleaned_sql.lower().startswith("with"):
-                mat_query = f"CREATE OR REPLACE TABLE {model_name} AS {cleaned_sql};"
+            # Strip SQL comments to check if it's a SELECT or WITH query
+            lines = [l for l in sql_content.splitlines() if not l.strip().startswith("--")]
+            code_only = "\n".join(lines).rstrip(";").strip()
+
+            # If it's a SELECT or WITH statement, materialize it as a table and export to Parquet
+            if code_only.lower().startswith("select") or code_only.lower().startswith("with"):
+                mat_query = f"CREATE OR REPLACE TABLE {model_name} AS {code_only};"
                 conn.execute(mat_query)
                 row_count = conn.execute(f"SELECT COUNT(*) FROM {model_name}").fetchone()[0]
                 

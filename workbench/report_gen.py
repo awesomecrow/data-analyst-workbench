@@ -346,8 +346,60 @@ def generate_interactive_dashboard(project_dir: str = ".") -> str:
             table_html = t_df.to_html(classes="table", index=False, border=0)
 
         else:
-            # Generic first table preview
-            cols = [col[0] for col in conn.execute(f"DESCRIBE {primary_tbl}").fetchall()]
+            # Generic table auto-profiling for ANY table / mart
+            desc_rows = conn.execute(f"DESCRIBE {primary_tbl}").fetchall()
+            cols = [col[0] for col in desc_rows]
+            dtypes = {col[0]: col[1].upper() for col in desc_rows}
+
+            # Find candidate categorical column with reasonable cardinality (2..60)
+            cat_col = None
+            for c in cols:
+                dt = dtypes.get(c, "")
+                if "VARCHAR" in dt or "TEXT" in dt or "STRING" in dt:
+                    try:
+                        cardinality = conn.execute(f"SELECT COUNT(DISTINCT {c}) FROM {primary_tbl}").fetchone()[0]
+                        if 1 < cardinality <= 60:
+                            cat_col = c
+                            break
+                    except Exception:
+                        pass
+
+            if not cat_col and cols:
+                for c in cols:
+                    try:
+                        cardinality = conn.execute(f"SELECT COUNT(DISTINCT {c}) FROM {primary_tbl}").fetchone()[0]
+                        if 1 < cardinality <= 60:
+                            cat_col = c
+                            break
+                    except Exception:
+                        pass
+
+            if cat_col:
+                chart_1_title = f"Top 10 Breakdown by {cat_col.replace('_', ' ').title()}"
+                chart_2_title = f"{cat_col.replace('_', ' ').title()} Share Distribution"
+
+                cat_rows = conn.execute(
+                    f"SELECT COALESCE(CAST({cat_col} AS VARCHAR), 'Unknown') AS label, COUNT(*) AS count_val FROM {primary_tbl} GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+                ).fetchall()
+
+                chart_1_json = json.dumps({
+                    "categories": [str(r[0]) for r in cat_rows],
+                    "values": [int(r[1]) for r in cat_rows]
+                })
+                chart_2_json = json.dumps({
+                    "data": [{"name": str(r[0]), "value": int(r[1])} for r in cat_rows]
+                })
+
+                top_cat = cat_rows[0][0] if cat_rows else "N/A"
+                top_count = cat_rows[0][1] if cat_rows else 0
+                kpi_cards.append(f"""
+                <div class="kpi-card">
+                  <div class="kpi-title">Top {cat_col.replace('_', ' ').title()}</div>
+                  <div class="kpi-value">{top_cat}</div>
+                  <div class="kpi-sub">{top_count:,} occurrences ({round(top_count/total_rows*100, 1) if total_rows else 0}%)</div>
+                </div>
+                """)
+
             kpi_cards.append(f"""
             <div class="kpi-card">
               <div class="kpi-title">Dimensional Columns</div>
@@ -355,7 +407,9 @@ def generate_interactive_dashboard(project_dir: str = ".") -> str:
               <div class="kpi-sub">{", ".join(cols[:3])}...</div>
             </div>
             """)
-            t_df = conn.execute(f"SELECT * FROM {primary_tbl} LIMIT 20").fetch_df()
+
+            table_title = f"{primary_tbl.replace('_', ' ').title()} - Detailed Records"
+            t_df = conn.execute(f"SELECT * FROM {primary_tbl} LIMIT 25").fetch_df()
             table_html = t_df.to_html(classes="table", index=False, border=0)
 
     html_content = HTML_TEMPLATE.format(
